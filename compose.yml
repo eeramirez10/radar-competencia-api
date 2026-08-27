@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: radar-competencia-backend:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3010
+      STORAGE_DIR: /app/storage
+    ports:
+      - "${BACKEND_PORT:-3010}:3010"
+    volumes:
+      - radar_files:/app/storage
+      - ./data:/app/legacy-data:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3010/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  radar_files:
+    name: radar_competencia_files

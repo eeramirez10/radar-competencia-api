@@ -1,0 +1,9 @@
+node_modules
+dist
+src/generated/prisma
+.env
+.DS_Store
+data/*
+!data/.gitkeep
+storage/*
+!storage/.gitkeep

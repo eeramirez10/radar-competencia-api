@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model RadarState {
+  id        String   @id
+  updatedAt DateTime @updatedAt
+}
+
+model Invoice {
+  id               String   @id
+  sourceFileName   String
+  direction        String
+  companyRfc       String
+  companyName      String
+  counterpartyRfc  String
+  counterpartyName String
+  issuedAt         String
+  certifiedAt      String
+  subtotal         Decimal  @db.Decimal(18, 2)
+  total            Decimal  @db.Decimal(18, 2)
+  status           String
+  effect           String
+  year             Int
+  month            Int
+  monthKey         String
+  createdAt        DateTime @default(now())
+
+  @@index([sourceFileName])
+  @@index([companyRfc, direction])
+  @@index([counterpartyRfc])
+  @@index([year, month])
+}
+
+model CompetitorFile {
+  id                String   @id @default(uuid())
+  fileName          String
+  storedAt          DateTime
+  recordsRead       Int
+  inserted          Int
+  duplicatesIgnored Int
+  directions        Json
+  companies         Json?
+
+  @@index([fileName])
+}
+
+model CustomerDirectoryMeta {
+  id        String   @id
+  fileName  String
+  updatedAt DateTime @updatedAt
+}
+
+model CustomerDirectoryEntry {
+  taxId          String @id
+  customerName   String
+  sourceFileName String
+
+  @@index([customerName])
+}
+
+model CustomerSalesCache {
+  taxId          String
+  periodKey      String
+  customerName   String
+  customerCode   String?
+  totalAmount    Decimal  @db.Decimal(18, 2)
+  subtotalAmount Decimal  @db.Decimal(18, 2)
+  activeMonths   Int[]
+  monthly        Json
+  year           Int
+  status         String
+  fetchedAt      DateTime
+  updatedAt      DateTime @updatedAt
+
+  @@id([taxId, periodKey])
+  @@index([periodKey])
+}
+
+model CustomerCrossSnapshot {
+  id         String               @id @default(uuid())
+  key        String               @unique
+  companyRfc String
+  startDate  String
+  endDate    String
+  apiBaseUrl String
+  apiPath    String
+  savedAt    DateTime
+  entries    CustomerCrossEntry[]
+
+  @@index([companyRfc])
+}
+
+model CustomerCrossEntry {
+  snapshotId         String
+  taxId              String
+  crossed            Boolean
+  hasSales           Boolean
+  savedAt            DateTime
+  ownCustomerSummary Json?
+  snapshot           CustomerCrossSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@id([snapshotId, taxId])
+  @@index([taxId])
+}
