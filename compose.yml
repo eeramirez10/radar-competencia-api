@@ -1,10 +1,31 @@
+name: radar-competencia
+
 services:
-  backend:
+  volume-init:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: radar-competencia-backend:latest
-    restart: unless-stopped
+      target: runtime
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - >-
+        mkdir -p
+        /app/storage/uploads/competitors
+        /app/storage/uploads/customer-directory
+        /app/storage/legacy
+        && chown -R node:node /app/storage
+    volumes:
+      - radar_files:/app/storage
+    restart: "no"
+
+  radar-competencia-api:
+    build:
+      context: .
+      target: runtime
+    image: radar-competencia-api:local
+    container_name: radar-competencia-api
     env_file:
       - .env
     environment:
@@ -12,20 +33,57 @@ services:
       PORT: 3010
       STORAGE_DIR: /app/storage
     ports:
-      - "${BACKEND_PORT:-3010}:3010"
+      - "127.0.0.1:${HOST_PORT:-3010}:3010"
     volumes:
       - radar_files:/app/storage
       - ./data:/app/legacy-data:ro
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - fetch('http://127.0.0.1:3010/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+        - "fetch('http://127.0.0.1:3010/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  migrate:
+    profiles: [migrate]
+    build:
+      context: .
+      target: runtime
+    image: radar-competencia-api:local
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    entrypoint:
+      - npm
+      - run
+      - db:deploy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
 
 volumes:
   radar_files:

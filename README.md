@@ -81,12 +81,14 @@ npm run storage:migrate-local # copia data/ hacia storage/legacy sin borrar orig
 El archivo `compose.yml` levanta únicamente el backend; PostgreSQL continúa alojado en Neon. Antes de iniciar, coloca en `.env` las variables `DATABASE_URL` y `DIRECT_URL` de Neon.
 
 ```bash
-docker compose up -d --build
+docker compose build
+docker compose --profile migrate run --rm migrate
+docker compose up -d radar-competencia-api
 docker compose ps
-docker compose logs -f backend
+docker compose logs -f radar-competencia-api
 ```
 
-El servicio queda publicado en el puerto `3010`. Puedes cambiar el puerto del host con `BACKEND_PORT` sin modificar el puerto interno del contenedor.
+El servicio queda enlazado únicamente a `127.0.0.1:3010`, listo para publicarse mediante Nginx, Caddy u otro reverse proxy. Puedes cambiar el puerto del host con `HOST_PORT` sin modificar el puerto interno del contenedor.
 
 Docker crea el volumen persistente `radar_competencia_files`, montado en `/app/storage`:
 
@@ -94,16 +96,18 @@ Docker crea el volumen persistente `radar_competencia_files`, montado en `/app/s
 - `/app/storage/uploads/customer-directory`: padrones nuevos
 - `/app/storage/legacy`: copia inicial de los archivos anteriores
 
-Durante cada inicio, el contenedor:
+El despliegue separa responsabilidades:
 
-1. aplica las migraciones pendientes de Prisma en Neon;
-2. copia desde `./data` hacia el volumen solamente los archivos que todavía no existen;
-3. inicia el API como usuario sin privilegios.
+1. `migrate` aplica las migraciones pendientes de Prisma en Neon y termina;
+2. `volume-init` crea las carpetas persistentes y les asigna permisos al usuario `node`;
+3. `radar-competencia-api` copia desde `./data` solamente los archivos faltantes y levanta el API.
+
+El API usa filesystem de sólo lectura, `/tmp` temporal, `no-new-privileges`, proceso init y rotación local de logs.
 
 `./data` se monta como sólo lectura. La migración no elimina ni modifica sus archivos. Para comprobar el contenido persistente:
 
 ```bash
-docker compose exec backend find /app/storage -maxdepth 3 -type f
+docker compose exec radar-competencia-api find /app/storage -maxdepth 3 -type f
 ```
 
 Al copiar el proyecto al servidor, incluye el directorio `data/` si deseas migrar esos archivos históricos al volumen en el primer arranque. No copies el archivo `.env` mediante Git; créalo directamente en el servidor.
