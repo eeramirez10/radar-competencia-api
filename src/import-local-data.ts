@@ -22,6 +22,7 @@ async function readJson<T>(fileName: string): Promise<T | null> {
 async function main() {
   const replace = process.argv.includes('--replace')
   const resume = process.argv.includes('--resume')
+  let importedSources = 0
   const [invoiceCount, cacheCount, directoryCount, snapshotCount] = await Promise.all([
     prisma.invoice.count(),
     prisma.customerSalesCache.count(),
@@ -40,12 +41,14 @@ async function main() {
 
   const dataset = await readJson<CompetitorDatasetStore>('competitor-invoices.json')
   if (dataset) {
+    importedSources += 1
     await new CompetitorDataset().importLegacy(dataset, { replace })
     console.log(`Facturas importadas: ${dataset.invoices?.length || 0}`)
   }
 
   const cacheData = await readJson<CustomerCacheFile>('customer-sales-cache.json')
   if (cacheData) {
+    importedSources += 1
     const cache = new CustomerSalesCache()
     const byPeriod = new Map<string, typeof cacheData.entries[string][]>()
     for (const entry of Object.values(cacheData.entries || {})) {
@@ -62,6 +65,7 @@ async function main() {
     const fileName = `mis-clientes.${extension}`
     try {
       const buffer = await fs.readFile(path.join(importDirectory, fileName))
+      importedSources += 1
       const rows = await saveCustomerDirectory(fileName, buffer)
       console.log(`Clientes importados: ${rows.length}`)
       break
@@ -69,6 +73,27 @@ async function main() {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
   }
+
+  if (importedSources === 0) {
+    throw new Error(`No se encontraron archivos históricos para importar en ${importDirectory}.`)
+  }
+
+  const [finalInvoices, finalFiles, finalCustomers, finalCache, finalSnapshots, finalCrossEntries] = await Promise.all([
+    prisma.invoice.count(),
+    prisma.competitorFile.count(),
+    prisma.customerDirectoryEntry.count(),
+    prisma.customerSalesCache.count(),
+    prisma.customerCrossSnapshot.count(),
+    prisma.customerCrossEntry.count(),
+  ])
+  console.log(JSON.stringify({
+    invoices: finalInvoices,
+    files: finalFiles,
+    customers: finalCustomers,
+    cache: finalCache,
+    snapshots: finalSnapshots,
+    crossEntries: finalCrossEntries,
+  }))
 }
 
 main()
