@@ -33,8 +33,11 @@ model Invoice {
 
   @@index([sourceFileName])
   @@index([companyRfc, direction])
+  @@index([companyRfc, year, direction, status])
   @@index([counterpartyRfc])
+  @@index([counterpartyRfc, year])
   @@index([year, month])
+  @@index([status, year])
 }
 
 model CompetitorFile {

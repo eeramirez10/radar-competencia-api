@@ -1,4 +1,5 @@
 import path from 'node:path'
+import compression from 'compression'
 import cors from 'cors'
 import express from 'express'
 import multer from 'multer'
@@ -8,7 +9,6 @@ import {
   buildCompetitorOverlap,
   buildCustomerCompetitionRows,
   buildCustomerDirectoryMatches,
-  dedupeInvoices,
   getDirectoryMatchedTaxIds,
   getExcelCustomerTaxIds,
   getInvoiceTimestamp,
@@ -27,7 +27,7 @@ import {
 import { generateSimpleWorkbook } from './report-generator.js'
 import { archiveUploadedFiles } from './file-storage.js'
 
-const DATABASE_STORAGE = 'neon-postgresql'
+const DATABASE_STORAGE = process.env.DATABASE_STORAGE_LABEL || 'postgresql-docker'
 const SUPPORTED_DIRECTORY_EXTENSIONS = ['.xlsx', '.xls', '.csv'] as const
 const PRIMARY_KEY = 'FolioFiscal'
 
@@ -96,6 +96,7 @@ function resolveCustomerCrossConfig(body: Record<string, unknown> | undefined) {
 }
 
 app.use(cors())
+app.use(compression({ threshold: 1_024 }))
 app.use(express.json({ limit: '10mb' }))
 
 async function getAnalysisBase(companyRfc?: string, startDate?: string, endDate?: string) {
@@ -108,7 +109,7 @@ async function getAnalysisBase(companyRfc?: string, startDate?: string, endDate?
   if (!directoryMeta) {
     throw new Error('No existe todavía un padrón mis-clientes (.xlsx, .xls o .csv) en el backend.')
   }
-  const invoices = dedupeInvoices(dataset.invoices)
+  const invoices = dataset.invoices
   const dateScopedInvoices = startDate && endDate
     ? invoices.filter((invoice) => isInvoiceWithinRange(invoice, startDate, endDate))
     : invoices
@@ -143,7 +144,15 @@ app.get('/api/cache/status', async (_req, res) => {
 app.get('/api/competitors/data', async (_req, res) => {
   try {
     const dataset = await competitorDataset.read()
-    const invoices = dedupeInvoices(dataset.invoices)
+    const invoices = dataset.invoices
+    const requestedVersion = String(_req.query.version || '')
+    res.setHeader(
+      'Cache-Control',
+      requestedVersion && requestedVersion === dataset.updatedAt
+        ? 'private, max-age=86400, immutable'
+        : 'private, no-cache',
+    )
+    res.setHeader('X-Dataset-Version', dataset.updatedAt)
     res.json({
       ok: true,
       invoices,
@@ -160,25 +169,21 @@ app.get('/api/competitors/data', async (_req, res) => {
 })
 
 app.get('/api/competitors/status', async (_req, res) => {
-  const data = await competitorDataset.read()
-  const byDirection = data.invoices.reduce(
-    (acc, invoice) => {
-      acc[invoice.direction] += 1
-      return acc
-    },
-    { emitida: 0, recibida: 0 },
-  )
-
-  res.json({
-    ok: true,
-    storage: DATABASE_STORAGE,
-    invoices: data.invoices.length,
-    emitidas: byDirection.emitida,
-    recibidas: byDirection.recibida,
-    files: data.files,
-    updatedAt: data.updatedAt,
-    primaryKey: PRIMARY_KEY,
-  })
+  try {
+    const status = await competitorDataset.getStatus()
+    res.setHeader('Cache-Control', 'private, no-cache')
+    res.json({
+      ok: true,
+      storage: DATABASE_STORAGE,
+      ...status,
+      primaryKey: PRIMARY_KEY,
+    })
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: error instanceof Error ? error.message : 'No se pudo consultar el estado del dataset.',
+    })
+  }
 })
 
 app.post('/api/competitors/upload', upload.array('files'), async (req, res) => {
@@ -206,7 +211,7 @@ app.post('/api/competitors/upload', upload.array('files'), async (req, res) => {
       duplicatesIgnored: result.duplicatesIgnored,
       uploaded: result.uploaded,
       archivedFiles,
-      updatedAt: result.dataset.updatedAt,
+      updatedAt: result.updatedAt,
     })
   } catch (error) {
     res.status(400).json({
@@ -228,8 +233,8 @@ app.post('/api/competitors/remove-file', async (req, res) => {
       removedInvoices: result.removedInvoices,
       removedFiles: result.removedFiles,
       impactedCompanyRfcs: result.impactedCompanyRfcs,
-      remainingInvoices: result.dataset.invoices.length,
-      updatedAt: result.dataset.updatedAt,
+      remainingInvoices: result.remainingInvoices,
+      updatedAt: result.updatedAt,
     })
   } catch (error) {
     res.status(400).json({
@@ -655,7 +660,7 @@ app.post('/api/report/generate', async (req, res) => {
     const apiConcurrency = Number(req.body.apiConcurrency || 4)
     const apiTimeoutMs = Number(req.body.apiTimeoutMs || 20000)
 
-    const invoices = dedupeInvoices(dataset.invoices).filter((invoice) => isInvoiceWithinRange(invoice, startDate, endDate))
+    const invoices = dataset.invoices.filter((invoice) => isInvoiceWithinRange(invoice, startDate, endDate))
     const periodKey = buildPeriodKey(startDate, endDate)
     const reportYear = getYearFromDateInput(startDate) === getYearFromDateInput(endDate)
       ? getYearFromDateInput(startDate)

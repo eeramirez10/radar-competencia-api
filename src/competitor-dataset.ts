@@ -44,6 +44,24 @@ export interface CompetitorDatasetStore {
 
 const DATASET_STATE_ID = 'competitor-dataset'
 const BATCH_SIZE = 2_000
+const invoiceSelect = {
+  id: true,
+  sourceFileName: true,
+  direction: true,
+  companyRfc: true,
+  companyName: true,
+  counterpartyRfc: true,
+  counterpartyName: true,
+  issuedAt: true,
+  certifiedAt: true,
+  subtotal: true,
+  total: true,
+  status: true,
+  effect: true,
+  year: true,
+  month: true,
+  monthKey: true,
+} satisfies Prisma.InvoiceSelect
 
 function invoiceFromDb(row: {
   id: string; sourceFileName: string; direction: string; companyRfc: string; companyName: string
@@ -69,6 +87,21 @@ function snapshotEntryFromDb(entry: {
     hasSales: entry.hasSales,
     savedAt: entry.savedAt.toISOString(),
     ownCustomerSummary: entry.ownCustomerSummary as OwnCustomerSalesSummary | null,
+  }
+}
+
+function fileFromDb(file: {
+  fileName: string; storedAt: Date; recordsRead: number; inserted: number; duplicatesIgnored: number
+  directions: unknown; companies: unknown
+}): CompetitorUploadFileMeta {
+  return {
+    fileName: file.fileName,
+    storedAt: file.storedAt.toISOString(),
+    recordsRead: file.recordsRead,
+    inserted: file.inserted,
+    duplicatesIgnored: file.duplicatesIgnored,
+    directionsDetected: file.directions as CompetitorUploadFileMeta['directionsDetected'],
+    companiesDetected: (file.companies || undefined) as CompetitorUploadFileMeta['companiesDetected'],
   }
 }
 
@@ -100,37 +133,57 @@ async function insertInvoices(invoices: NormalizedInvoice[]) {
 }
 
 export class CompetitorDataset {
+  private cachedDataset: CompetitorDatasetStore | null = null
+  private pendingRead: Promise<CompetitorDatasetStore> | null = null
+
+  private invalidateCache() {
+    this.cachedDataset = null
+    this.pendingRead = null
+  }
+
   async read(): Promise<CompetitorDatasetStore> {
-    const [invoiceRows, fileRows, snapshots, state] = await Promise.all([
-      prisma.invoice.findMany(),
+    if (this.cachedDataset) return this.cachedDataset
+    if (this.pendingRead) return this.pendingRead
+
+    this.pendingRead = (async () => {
+      const [invoiceRows, fileRows, state] = await Promise.all([
+        prisma.invoice.findMany({ select: invoiceSelect }),
+        prisma.competitorFile.findMany({ orderBy: { storedAt: 'asc' } }),
+        prisma.radarState.findUnique({ where: { id: DATASET_STATE_ID } }),
+      ])
+      const dataset: CompetitorDatasetStore = {
+        version: 1,
+        updatedAt: state?.updatedAt.toISOString() || new Date(0).toISOString(),
+        invoices: invoiceRows.map(invoiceFromDb),
+        files: fileRows.map(fileFromDb),
+        customerCrossByCompany: {},
+      }
+      this.cachedDataset = dataset
+      return dataset
+    })()
+
+    try {
+      return await this.pendingRead
+    } finally {
+      this.pendingRead = null
+    }
+  }
+
+  async getStatus() {
+    const [invoices, emitidas, recibidas, fileRows, state] = await Promise.all([
+      prisma.invoice.count(),
+      prisma.invoice.count({ where: { direction: 'emitida' } }),
+      prisma.invoice.count({ where: { direction: 'recibida' } }),
       prisma.competitorFile.findMany({ orderBy: { storedAt: 'asc' } }),
-      prisma.customerCrossSnapshot.findMany({ include: { entries: true } }),
       prisma.radarState.findUnique({ where: { id: DATASET_STATE_ID } }),
     ])
 
-    const customerCrossByCompany: CustomerCrossSnapshotsByCompany = {}
-    for (const snapshot of snapshots) {
-      const value: CustomerCrossSnapshot = {
-        key: snapshot.key, companyRfc: snapshot.companyRfc, startDate: snapshot.startDate,
-        endDate: snapshot.endDate, apiBaseUrl: snapshot.apiBaseUrl, apiPath: snapshot.apiPath,
-        savedAt: snapshot.savedAt.toISOString(),
-        entries: Object.fromEntries(snapshot.entries.map((entry) => [entry.taxId, snapshotEntryFromDb(entry)])),
-      }
-      customerCrossByCompany[snapshot.companyRfc] ||= {}
-      customerCrossByCompany[snapshot.companyRfc][snapshot.key] = value
-    }
-
     return {
-      version: 1,
+      invoices,
+      emitidas,
+      recibidas,
+      files: fileRows.map(fileFromDb),
       updatedAt: state?.updatedAt.toISOString() || new Date(0).toISOString(),
-      invoices: invoiceRows.map(invoiceFromDb),
-      files: fileRows.map((file) => ({
-        fileName: file.fileName, storedAt: file.storedAt.toISOString(), recordsRead: file.recordsRead,
-        inserted: file.inserted, duplicatesIgnored: file.duplicatesIgnored,
-        directionsDetected: file.directions as CompetitorUploadFileMeta['directionsDetected'],
-        companiesDetected: (file.companies || undefined) as CompetitorUploadFileMeta['companiesDetected'],
-      })),
-      customerCrossByCompany,
     }
   }
 
@@ -139,6 +192,7 @@ export class CompetitorDataset {
       prisma.invoice.deleteMany(), prisma.competitorFile.deleteMany(), prisma.customerCrossSnapshot.deleteMany(),
     ])
     await touchDataset()
+    this.invalidateCache()
   }
 
   async addFiles(files: Array<{ fileName: string; buffer: Buffer }>) {
@@ -166,9 +220,13 @@ export class CompetitorDataset {
     }
 
     await touchDataset()
+    this.invalidateCache()
+    const status = await this.getStatus()
     return {
-      dataset: await this.read(), uploaded: metas,
-      totalInvoices: await prisma.invoice.count(), inserted: totalInserted,
+      uploaded: metas,
+      totalInvoices: status.invoices,
+      updatedAt: status.updatedAt,
+      inserted: totalInserted,
       duplicatesIgnored: metas.reduce((sum, item) => sum + item.duplicatesIgnored, 0),
     }
   }
@@ -189,9 +247,14 @@ export class CompetitorDataset {
       prisma.customerCrossSnapshot.deleteMany({ where: { companyRfc: { in: impactedCompanyRfcs } } }),
     ])
     await touchDataset()
+    this.invalidateCache()
+    const status = await this.getStatus()
     return {
-      dataset: await this.read(), removedInvoices: removedInvoices.count,
-      removedFiles: removedFiles.count, impactedCompanyRfcs,
+      removedInvoices: removedInvoices.count,
+      removedFiles: removedFiles.count,
+      impactedCompanyRfcs,
+      remainingInvoices: status.invoices,
+      updatedAt: status.updatedAt,
     }
   }
 
@@ -243,6 +306,7 @@ export class CompetitorDataset {
   }
 
   async importLegacy(data: CompetitorDatasetStore, options: { replace?: boolean } = {}) {
+    this.invalidateCache()
     if (options.replace) await this.clear()
     await insertInvoices(dedupeInvoices(data.invoices || []))
     for (const file of data.files || []) {
@@ -262,5 +326,6 @@ export class CompetitorDataset {
       }
     }
     await touchDataset()
+    this.invalidateCache()
   }
 }

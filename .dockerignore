@@ -7,5 +7,6 @@ dist
 .gitignore
 storage
 data
+backups
 npm-debug.log*
 *.log

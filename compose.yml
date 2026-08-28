@@ -1,6 +1,37 @@
 name: radar-competencia
 
 services:
+  postgres:
+    image: postgres:17-bookworm
+    container_name: radar-competencia-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-radar_competencia}
+      POSTGRES_USER: ${POSTGRES_USER:-radar_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: --data-checksums
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    shm_size: 256mb
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
   volume-init:
     build:
       context: .
@@ -32,12 +63,17 @@ services:
       NODE_ENV: production
       PORT: 3010
       STORAGE_DIR: /app/storage
+      DATABASE_STORAGE_LABEL: postgresql-docker
+      DATABASE_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
+      DIRECT_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
     ports:
       - "127.0.0.1:${HOST_PORT:-3010}:3010"
     volumes:
       - radar_files:/app/storage
       - ./data:/app/legacy-data:ro
     depends_on:
+      postgres:
+        condition: service_healthy
       volume-init:
         condition: service_completed_successfully
     init: true
@@ -73,6 +109,11 @@ services:
       - .env
     environment:
       NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
+      DIRECT_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
+    depends_on:
+      postgres:
+        condition: service_healthy
     entrypoint:
       - npm
       - run
@@ -85,6 +126,61 @@ services:
       - no-new-privileges:true
     restart: "no"
 
+  import-local-data:
+    profiles: [import]
+    build:
+      context: .
+      target: runtime
+    image: radar-competencia-api:local
+    environment:
+      NODE_ENV: production
+      DATA_IMPORT_DIR: /app/import-data
+      DATABASE_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
+      DIRECT_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
+    entrypoint:
+      - node
+      - dist/import-local-data.js
+    command:
+      - --resume
+    volumes:
+      - ./data:/app/import-data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  backup:
+    profiles: [backup]
+    image: postgres:17-bookworm
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-radar_competencia}
+      PGUSER: ${POSTGRES_USER:-radar_app}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - >-
+        pg_dump --format=custom --no-owner --no-privileges
+        --file="/backups/radar_competencia_$$(date +%Y%m%d_%H%M%S).dump"
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
 volumes:
+  postgres_data:
+    name: radar_competencia_postgres
   radar_files:
     name: radar_competencia_files
