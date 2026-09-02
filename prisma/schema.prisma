@@ -7,6 +7,29 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id           String        @id @default(uuid())
+  username     String        @unique
+  passwordHash String
+  role         String        @default("admin")
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  sessions     AuthSession[]
+}
+
+model AuthSession {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
 model RadarState {
   id        String   @id
   updatedAt DateTime @updatedAt

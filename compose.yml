@@ -66,6 +66,9 @@ services:
       DATABASE_STORAGE_LABEL: postgresql-docker
       DATABASE_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
       DIRECT_URL: postgresql://${POSTGRES_USER:-radar_app}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-radar_competencia}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Define ADMIN_PASSWORD in .env}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS:-12}
     ports:
       - "127.0.0.1:${HOST_PORT:-3010}:3010"
     volumes:

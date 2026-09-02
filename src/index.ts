@@ -2,7 +2,9 @@ import path from 'node:path'
 import compression from 'compression'
 import cors from 'cors'
 import express from 'express'
+import helmet from 'helmet'
 import multer from 'multer'
+import { ensureAdminUser, registerAuth } from './auth.js'
 import { CustomerSalesCache } from './cache.js'
 import { CompetitorDataset } from './competitor-dataset.js'
 import {
@@ -32,6 +34,7 @@ const SUPPORTED_DIRECTORY_EXTENSIONS = ['.xlsx', '.xls', '.csv'] as const
 const PRIMARY_KEY = 'FolioFiscal'
 
 const app = express()
+app.set('trust proxy', 1)
 const upload = multer({ storage: multer.memoryStorage() })
 const cache = new CustomerSalesCache()
 const competitorDataset = new CompetitorDataset()
@@ -96,8 +99,10 @@ function resolveCustomerCrossConfig(body: Record<string, unknown> | undefined) {
 }
 
 app.use(cors())
+app.use(helmet())
 app.use(compression({ threshold: 1_024 }))
 app.use(express.json({ limit: '10mb' }))
+registerAuth(app)
 
 async function getAnalysisBase(companyRfc?: string, startDate?: string, endDate?: string) {
   const dataset = await competitorDataset.read()
@@ -713,11 +718,20 @@ app.post('/api/cache/clear', async (_req, res) => {
 })
 
 const port = Number(process.env.PORT || 3010)
-const server = app.listen(port, () => {
-  console.log(`radar-competencia-backend listo en http://localhost:${port}`)
-})
+let server: ReturnType<typeof app.listen> | null = null
+
+async function start() {
+  await ensureAdminUser()
+  server = app.listen(port, () => {
+    console.log(`radar-competencia-backend listo en http://localhost:${port}`)
+  })
+}
 
 async function shutdown() {
+  if (!server) {
+    await prisma.$disconnect()
+    process.exit(0)
+  }
   server.close(async () => {
     await prisma.$disconnect()
     process.exit(0)
@@ -726,3 +740,9 @@ async function shutdown() {
 
 process.once('SIGINT', shutdown)
 process.once('SIGTERM', shutdown)
+
+start().catch(async (error) => {
+  console.error('No se pudo iniciar el backend:', error)
+  await prisma.$disconnect()
+  process.exit(1)
+})

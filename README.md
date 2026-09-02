@@ -37,9 +37,20 @@ POSTGRES_USER=radar_app
 POSTGRES_PASSWORD=CAMBIA_ESTA_CONTRASENA
 DATABASE_URL="postgresql://radar_app:CAMBIA_ESTA_CONTRASENA@localhost:5432/radar_competencia"
 DIRECT_URL="postgresql://radar_app:CAMBIA_ESTA_CONTRASENA@localhost:5432/radar_competencia"
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=CAMBIA_ESTA_CONTRASENA_ADMIN
+AUTH_SESSION_TTL_HOURS=12
 ```
 
 Dentro de Compose, `DATABASE_URL` y `DIRECT_URL` se sustituyen automáticamente para utilizar el hostname interno `postgres`.
+
+## Autenticación
+
+Todos los endpoints `/api`, excepto `POST /api/auth/login`, requieren una sesión Bearer válida. `GET /health` permanece público para Docker y monitoreo.
+
+Al iniciar el backend se crea el usuario indicado por `ADMIN_USERNAME`. La contraseña nunca se guarda en texto plano: se deriva con `scrypt` y sal aleatoria. Si cambias `ADMIN_PASSWORD` y reinicias el API, la contraseña se rota y las sesiones anteriores se revocan.
+
+Las sesiones se almacenan hasheadas en PostgreSQL y vencen según `AUTH_SESSION_TTL_HOURS` (12 horas por defecto). El login está limitado a 10 intentos por IP cada 15 minutos.
 
 ## Importar los datos locales actuales
 
@@ -174,6 +185,9 @@ Nunca ejecutes `docker compose down -v` en producción: `-v` elimina los volúme
 ## Endpoints principales
 
 - `GET /health`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
 - `GET /api/cache/status`
 - `POST /api/cache/clear`
 - `GET /api/competitors/status`
